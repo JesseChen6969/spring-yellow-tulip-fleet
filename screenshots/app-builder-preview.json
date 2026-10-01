@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "亚当夏娃 · A股形态扫描",
+      "hasCanvas": false,
+      "bodyTextLen": 497,
+      "bodyTextHash": "2068ed1eff949cc55fb136d5d6a107e923dc05edaddae85dcdb1fb19f44548e7",
+      "bodyTextPrefix": "A SHARE · DAILY 亚当夏娃 下跌末端先走出尖底亚当，再走出更宽的圆底夏娃。两底之间的高点是颈线。收盘站上颈线，才进",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "亚当夏娃 · A股形态扫描",
+      "hasCanvas": false,
+      "bodyTextLen": 497,
+      "bodyTextHash": "2068ed1eff949cc55fb136d5d6a107e923dc05edaddae85dcdb1fb19f44548e7",
+      "bodyTextPrefix": "A SHARE · DAILY 亚当夏娃 下跌末端先走出尖底亚当，再走出更宽的圆底夏娃。两底之间的高点是颈线。收盘站上颈线，才进",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}

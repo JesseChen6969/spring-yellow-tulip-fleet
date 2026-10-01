@@ -1,0 +1,41 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "亚当夏娃 · A股形态扫描",
+      "hasCanvas": false,
+      "bodyTextLen": 582,
+      "bodyTextHash": "8ac48e72cad3e40efbd319b0a09dd0db40a39924dd6bb956413b740fd1a8789b",
+      "bodyTextPrefix": "A SHARE · DAILY · 两套分开 亚当夏娃 夏娃启V 亚当夏娃 下跌末端先走出尖底亚当，再走出更宽的圆底夏娃。两底之",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "亚当夏娃 · A股形态扫描",
+      "hasCanvas": false,
+      "bodyTextLen": 582,
+      "bodyTextHash": "8ac48e72cad3e40efbd319b0a09dd0db40a39924dd6bb956413b740fd1a8789b",
+      "bodyTextPrefix": "A SHARE · DAILY · 两套分开 亚当夏娃 夏娃启V 亚当夏娃 下跌末端先走出尖底亚当，再走出更宽的圆底夏娃。两底之",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": true,
+  "baselineReasons": [
+    "desktop: body text changed (497 -> 582 chars, hash mismatch)",
+    "mobile: body text changed (497 -> 582 chars, hash mismatch)"
+  ]
+}
