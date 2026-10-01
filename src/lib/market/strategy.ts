@@ -1,21 +1,29 @@
-import { NORMAL_SLOTS, RISK_OFF_ENTRY_SCORE, RISK_OFF_SLOTS, SLOT_WEIGHT } from "@/lib/market/gates";
+import {
+  NORMAL_SLOTS,
+  RISK_OFF_ENTRY_SCORE,
+  RISK_OFF_SLOTS,
+  SLOT_WEIGHT,
+  BUY_COST,
+  SELL_COST,
+} from "./gates";
 
 export type BookTrade = {
   code: string;
   signalDate: string;
+  entryDate: string;
   exitDate: string;
   score: number;
   gross: number;
   net: number;
+  riskPct: number;
+  open: boolean;
+  marks: { date: string; gross: number }[];
 };
-
-export type EquityPoint = {
-  date: string;
-  equity: number;
-};
-
+export type EquityPoint = { date: string; equity: number };
 export type StrategyStats = {
   taken: number;
+  closed: number;
+  open: number;
   skippedRegime: number;
   skippedSlot: number;
   winRate: number;
@@ -27,22 +35,11 @@ export type StrategyStats = {
   maxDrawdown: number;
   curve: EquityPoint[];
 };
+const RISK_BUDGET = 0.005;
+const mean = (values: number[]) =>
+  values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
 
-function mean(values: number[]) {
-  if (!values.length) return 0;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
-function sampleCurve(curve: EquityPoint[], max = 90) {
-  if (curve.length <= max) return curve;
-  const step = Math.ceil(curve.length / max);
-  const sampled: EquityPoint[] = [];
-  for (let index = 0; index < curve.length; index += step) sampled.push(curve[index]);
-  const last = curve[curve.length - 1];
-  if (sampled[sampled.length - 1]?.date !== last.date) sampled.push(last);
-  return sampled;
-}
-
+/** Daily marked equity. Decisions and risk sizing use the previous close only. */
 export function simulateBook(
   trades: BookTrade[],
   regime: Record<string, boolean>,
@@ -50,95 +47,117 @@ export function simulateBook(
 ): StrategyStats {
   const byEntry = new Map<string, BookTrade[]>();
   for (const trade of trades) {
-    const list = byEntry.get(trade.signalDate) ?? [];
-    list.push(trade);
-    byEntry.set(trade.signalDate, list);
+    const group = byEntry.get(trade.entryDate) ?? [];
+    group.push(trade);
+    byEntry.set(trade.entryDate, group);
   }
-  for (const list of byEntry.values()) list.sort((a, b) => b.score - a.score);
-
-  let cash = 1;
-  const open: { code: string; cost: number; exitDate: string; net: number }[] = [];
+  for (const list of byEntry.values())
+    list.sort((a, b) => b.score - a.score || a.code.localeCompare(b.code));
+  const positions: {
+    trade: BookTrade;
+    notional: number;
+    cost: number;
+    mark: number;
+    marks: Map<string, number>;
+  }[] = [];
+  const closed: number[] = [],
+    grosses: number[] = [];
   const curve: EquityPoint[] = [];
-  const closed: number[] = [];
-  const grosses: number[] = [];
-  let taken = 0;
-  let skippedRegime = 0;
-  let skippedSlot = 0;
-
-  const equityNow = () => cash + open.reduce((sum, position) => sum + position.cost, 0);
-
+  let cash = 1,
+    previousEquity = 1,
+    taken = 0,
+    skippedRegime = 0,
+    skippedSlot = 0;
   for (const date of calendar) {
-    for (let index = open.length - 1; index >= 0; index -= 1) {
-      if (open[index].exitDate > date) continue;
-      const position = open[index];
-      cash += position.cost * (1 + position.net);
-      closed.push(position.net);
-      open.splice(index, 1);
-    }
-
-    const due = byEntry.get(date) ?? [];
-    const riskOff = regime[date] ?? false;
-    const cap = riskOff ? RISK_OFF_SLOTS : NORMAL_SLOTS;
     let opened = 0;
-    for (const trade of due) {
-      if (riskOff && (trade.score < RISK_OFF_ENTRY_SCORE || opened >= 1)) {
+    // Buy at the open before receiving proceeds from today's later exits.
+    for (const trade of byEntry.get(date) ?? []) {
+      const riskOff = regime[trade.signalDate] ?? false;
+      const cap = riskOff ? RISK_OFF_SLOTS : NORMAL_SLOTS;
+      if (
+        riskOff &&
+        (trade.score < RISK_OFF_ENTRY_SCORE ||
+          opened >= 1 ||
+          positions.length >= cap)
+      ) {
         skippedRegime += 1;
         continue;
       }
-      const sameName = open.some((position) => position.code === trade.code);
-      if (open.length >= cap || sameName) {
-        if (riskOff && !sameName) skippedRegime += 1;
-        else skippedSlot += 1;
-        continue;
-      }
-      const budget = equityNow() * SLOT_WEIGHT;
-      if (!(budget > 0) || cash + 1e-9 < budget) {
+      if (
+        positions.length >= cap ||
+        positions.some((p) => p.trade.code === trade.code)
+      ) {
         skippedSlot += 1;
         continue;
       }
-      cash -= budget;
-      open.push({ code: trade.code, cost: budget, exitDate: trade.exitDate, net: trade.net });
-      grosses.push(trade.gross);
+      // Budget includes the initial stop distance and estimated round-trip costs.
+      const weight = Math.min(
+        SLOT_WEIGHT,
+        RISK_BUDGET / (trade.riskPct + BUY_COST + SELL_COST),
+      );
+      const notional = Math.min(previousEquity * weight, cash / (1 + BUY_COST));
+      if (!(notional > previousEquity * 0.001)) {
+        skippedSlot += 1;
+        continue;
+      }
+      const cost = notional * (1 + BUY_COST);
+      cash -= cost;
+      positions.push({
+        trade,
+        notional,
+        cost,
+        mark: notional,
+        marks: new Map(trade.marks.map((m) => [m.date, m.gross])),
+      });
       taken += 1;
       opened += 1;
     }
-    curve.push({ date, equity: equityNow() });
+    for (let i = positions.length - 1; i >= 0; i -= 1) {
+      const p = positions[i];
+      if (!p.trade.open && p.trade.exitDate <= date) {
+        cash += p.notional * (1 + p.trade.gross) * (1 - SELL_COST);
+        closed.push(p.trade.net);
+        grosses.push(p.trade.gross);
+        positions.splice(i, 1);
+      } else {
+        const gross = p.marks.get(date);
+        if (gross != null) p.mark = p.notional * (1 + gross);
+      }
+    }
+    previousEquity = cash + positions.reduce((sum, p) => sum + p.mark, 0);
+    curve.push({ date, equity: previousEquity });
   }
-
-  for (const position of open) {
-    cash += position.cost * (1 + position.net);
-    closed.push(position.net);
+  let peak = 1,
+    maxDrawdown = 0;
+  for (const p of curve) {
+    peak = Math.max(peak, p.equity);
+    maxDrawdown = Math.min(maxDrawdown, p.equity / peak - 1);
   }
-  if (calendar.length) curve.push({ date: calendar[calendar.length - 1], equity: cash });
-
-  let peak = 1;
-  let maxDrawdown = 0;
-  for (const point of curve) {
-    peak = Math.max(peak, point.equity);
-    maxDrawdown = Math.min(maxDrawdown, point.equity / peak - 1);
-  }
-
-  const totalReturn = cash - 1;
-  const sessions = Math.max(1, calendar.length);
-  const years = sessions / 242;
-  const annualized =
-    cash > 0 && years > 0.25 ? (cash ** (1 / years)) - 1 : totalReturn;
-  const wins = closed.filter((value) => value > 0);
-  const losses = closed.filter((value) => value < 0);
-  const avgGain = mean(wins);
-  const avgLoss = mean(losses);
-
+  const wins = closed.filter((x) => x > 0),
+    losses = closed.filter((x) => x < 0);
+  const first = calendar[0],
+    last = calendar.at(-1);
+  const years =
+    first && last
+      ? (Date.parse(last) - Date.parse(first)) / (365.25 * 86400000)
+      : 0;
+  const step = Math.max(1, Math.ceil(curve.length / 180));
   return {
     taken,
+    closed: closed.length,
+    open: positions.length,
     skippedRegime,
     skippedSlot,
     winRate: closed.length ? wins.length / closed.length : 0,
     avgNet: mean(closed),
     avgGross: mean(grosses),
-    payoff: avgLoss < 0 ? avgGain / Math.abs(avgLoss) : 0,
-    totalReturn,
-    annualized,
+    payoff: losses.length ? mean(wins) / Math.abs(mean(losses)) : 0,
+    totalReturn: previousEquity - 1,
+    annualized:
+      years > 0.25 && previousEquity > 0
+        ? previousEquity ** (1 / years) - 1
+        : previousEquity - 1,
     maxDrawdown,
-    curve: sampleCurve(curve.filter((point) => point.date)),
+    curve: curve.filter((_, i) => i % step === 0 || i === curve.length - 1),
   };
 }

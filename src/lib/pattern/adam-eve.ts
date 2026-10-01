@@ -13,6 +13,8 @@ export type Stage = "forming" | "breakout" | "retest" | "extended";
 
 export type Pattern = {
   score: number;
+  /** First date on which the complete signal was observable. */
+  signalIndex?: number;
   stage: Stage;
   adamIndex: number;
   eveIndex: number;
@@ -128,7 +130,8 @@ export function wilderAtr(bars: Bar[], period = 14): number | null {
 export function sma(bars: Bar[], period: number): number | null {
   if (bars.length < period) return null;
   let sum = 0;
-  for (let i = bars.length - period; i < bars.length; i += 1) sum += bars[i].close;
+  for (let i = bars.length - period; i < bars.length; i += 1)
+    sum += bars[i].close;
   return sum / period;
 }
 
@@ -136,7 +139,9 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+export type ExitMode = "fixed" | "trend";
 const HORIZON = 30;
+const TREND_HORIZON = 120;
 
 export type TradeOutcome = "target" | "stop" | "expired" | "open" | "missed";
 
@@ -148,14 +153,18 @@ export type PastTrade = {
   holdDays: number;
   returnPct: number;
   exitPrice: number;
+  entryDate?: string;
+  riskPct?: number;
+  exitMode?: ExitMode;
+  dailyReturns?: { date: string; gross: number }[];
 };
 
 export const OUTCOME_LABEL: Record<TradeOutcome, string> = {
   target: "先到目标",
-  stop: "先到止损",
+  stop: "止损/跟踪退出",
   expired: "到期未触及",
   open: "进行中",
-  missed: "未突破",
+  missed: "未成交",
 };
 
 /**
@@ -167,7 +176,9 @@ export const OUTCOME_LABEL: Record<TradeOutcome, string> = {
 function collectPatterns(bars: Bar[], archive: boolean): Pattern[] {
   if (bars.length < 70) return [];
   const last = bars.length - 1;
-  const pivots = swingLows(bars, 3).filter((index) => index > 20 && index < last - 2);
+  const pivots = swingLows(bars, 3).filter(
+    (index) => index > 20 && index < last - 2,
+  );
   const found: Pattern[] = [];
   let best: Pattern | null = null;
 
@@ -226,10 +237,16 @@ function collectPatterns(bars: Bar[], archive: boolean): Pattern[] {
       if (eveBasin.width < 6 || eveBasin.width > 26) continue;
       if (eveBasin.width < adamBasin.width + 3) continue;
 
-      const neighbors = [adamIndex - 2, adamIndex - 1, adamIndex + 1, adamIndex + 2]
+      const neighbors = [
+        adamIndex - 2,
+        adamIndex - 1,
+        adamIndex + 1,
+        adamIndex + 2,
+      ]
         .filter((index) => index >= 0 && index < bars.length)
         .map((index) => bars[index].low);
-      const neighborAvg = neighbors.reduce((sum, value) => sum + value, 0) / neighbors.length;
+      const neighborAvg =
+        neighbors.reduce((sum, value) => sum + value, 0) / neighbors.length;
       const spike = (neighborAvg - adamLow) / adamLow;
       if (spike < 0.006) continue;
 
@@ -242,7 +259,9 @@ function collectPatterns(bars: Bar[], archive: boolean): Pattern[] {
       if (eveSpike > 0.04) continue;
 
       const floor = Math.min(adamLow, eveLow);
-      const breakoutEnd = archive ? Math.min(bars.length, eveIndex + 36) : bars.length;
+      const breakoutEnd = archive
+        ? Math.min(bars.length, eveIndex + 36)
+        : bars.length;
       let breakoutIndex: number | null = null;
       let killed = false;
       for (let i = eveIndex + 1; i < breakoutEnd; i += 1) {
@@ -292,7 +311,8 @@ function collectPatterns(bars: Bar[], archive: boolean): Pattern[] {
         const since = last - breakoutIndex;
         if (lastClose < neckline * 0.985) continue;
         if (extension > 0.11 || since > 16) stage = "extended";
-        else if (retestIndex != null && lastClose >= neckline * 0.998) stage = "retest";
+        else if (retestIndex != null && lastClose >= neckline * 0.998)
+          stage = "retest";
         else stage = "breakout";
       }
 
@@ -322,7 +342,8 @@ function collectPatterns(bars: Bar[], archive: boolean): Pattern[] {
       score += STAGE_BIAS[stage];
       if (breakoutIndex != null && rvol >= 1.4) score += 8;
       else if (breakoutIndex != null && rvol >= 1.1) score += 3;
-      if (adamVol > 0 && averageVolume(bars, eveIndex) < adamVol * 0.9) score += 4;
+      if (adamVol > 0 && averageVolume(bars, eveIndex) < adamVol * 0.9)
+        score += 4;
       if (stage === "forming" && !(archive && !recent)) {
         const distance = (neckline - lastClose) / neckline;
         score += clamp(6 - distance * 70, 0, 6);
@@ -330,7 +351,10 @@ function collectPatterns(bars: Bar[], archive: boolean): Pattern[] {
       if (!archive) {
         if (stage === "extended") score -= 6;
         if (rewardRisk < 0.6 && stage !== "forming") score -= 8;
-        if ((stage === "breakout" || stage === "retest") && last - (breakoutIndex ?? last) <= 2) {
+        if (
+          (stage === "breakout" || stage === "retest") &&
+          last - (breakoutIndex ?? last) <= 2
+        ) {
           score += 3;
         }
       }
@@ -384,68 +408,153 @@ export function detectAdamEve(bars: Bar[]): Pattern | null {
   return collectPatterns(bars, false)[0] ?? null;
 }
 
-function settleTrade(bars: Bar[], pattern: Pattern): PastTrade {
-  const last = bars.length - 1;
-  const signal = pattern.breakoutIndex;
-  if (signal == null) {
-    const pivot = Math.max(pattern.adamIndex, pattern.eveIndex);
-    const open = last - pivot <= 40;
-    return {
-      pattern,
-      outcome: open ? "open" : "missed",
-      signalDate: bars[pivot].date,
-      exitDate: bars[pivot].date,
-      holdDays: 0,
-      returnPct: 0,
-      exitPrice: bars[pivot].low,
-    };
-  }
-
-  const entry = bars[signal].close;
-  const horizon = Math.min(last, signal + HORIZON);
-  let outcome: TradeOutcome = last < signal + HORIZON ? "open" : "expired";
-  let exitIndex = horizon;
-  let exitPrice = bars[horizon].close;
-  for (let i = signal + 1; i <= horizon; i += 1) {
-    const hitStop = bars[i].low <= pattern.stop;
-    const hitTarget = bars[i].high >= pattern.target;
-    if (!hitStop && !hitTarget) continue;
-    if (hitStop) {
-      outcome = "stop";
-      exitPrice = pattern.stop;
-    } else {
-      outcome = "target";
-      exitPrice = pattern.target;
+/** Signals are frozen as each prefix becomes available; no later replacement. */
+export function confirmedSignals(
+  bars: Bar[],
+  book: "adam-eve" | "eve-adam",
+): Pattern[] {
+  const signals: Pattern[] = [];
+  const seen = new Set<string>();
+  for (let end = 69; end < bars.length; end += 1) {
+    const start = Math.max(0, end - 219);
+    const prefix = bars.slice(start, end + 1);
+    const last = prefix.length - 1;
+    const candidates = (book === "eve-adam" ? collectEveAdam : collectPatterns)(
+      prefix,
+      true,
+    )
+      .filter(
+        (p) =>
+          p.breakoutIndex != null &&
+          p.breakoutIndex >= last - 3 &&
+          p.score >= 48 &&
+          prefix[last].close > p.neckline &&
+          prefix[last].close > p.stop,
+      )
+      .sort((a, b) => b.score - a.score || a.adamIndex - b.adamIndex);
+    for (const p of candidates) {
+      const key = bars[start + Math.max(p.adamIndex, p.eveIndex)].date;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      signals.push({
+        ...p,
+        signalIndex: end,
+        adamIndex: p.adamIndex + start,
+        eveIndex: p.eveIndex + start,
+        neckIndex: p.neckIndex + start,
+        breakoutIndex: p.breakoutIndex == null ? null : p.breakoutIndex + start,
+        retestIndex: p.retestIndex == null ? null : p.retestIndex + start,
+      });
     }
-    exitIndex = i;
-    break;
   }
+  return signals;
+}
 
+/** Conservative open-price execution. A gap through a stop fills at the open. */
+export function settleTrade(
+  bars: Bar[],
+  pattern: Pattern,
+  mode: ExitMode = "trend",
+  code = "",
+): PastTrade {
+  const signal =
+    pattern.signalIndex ?? pattern.breakoutIndex ?? bars.length - 1;
+  const entryIndex = signal + 1;
+  const first = bars[entryIndex];
+  const limit =
+    boardOf(code) === "chinext" && bars[signal].date < "2020-08-24"
+      ? 0.1
+      : boardOf(code) === "chinext" || boardOf(code) === "star"
+        ? 0.2
+        : 0.1;
+  const missed: PastTrade = {
+    pattern,
+    outcome: "missed",
+    signalDate: bars[signal].date,
+    exitDate: bars[signal].date,
+    holdDays: 0,
+    returnPct: 0,
+    exitPrice: bars[signal].close,
+    exitMode: mode,
+  };
+  if (
+    !first ||
+    first.volume <= 0 ||
+    first.open <= pattern.stop ||
+    (code && first.open >= bars[signal].close * (1 + limit) * 0.997) ||
+    (mode === "fixed" && first.open >= pattern.target)
+  )
+    return missed;
+  const entry = first.open;
+  const riskPct = (entry - pattern.stop) / entry;
+  if (!(riskPct > 0 && riskPct <= 0.2)) return missed;
+  const horizon = mode === "trend" ? TREND_HORIZON : HORIZON;
+  let stop = pattern.stop;
+  let peak = entry;
+  let exitIndex = bars.length - 1;
+  let exitPrice = bars[exitIndex].close;
+  let outcome: TradeOutcome = "open";
+  let pendingExit = false;
+  const dailyReturns: { date: string; gross: number }[] = [];
+  for (let i = entryIndex; i < bars.length; i += 1) {
+    const bar = bars[i];
+    const previous = bars[i - 1];
+    const dayLimit =
+      boardOf(code) === "chinext" && bar.date < "2020-08-24"
+        ? 0.1
+        : boardOf(code) === "chinext" || boardOf(code) === "star"
+          ? 0.2
+          : 0.1;
+    const lockedDown =
+      !!code && bar.high <= previous.close * (1 - dayLimit) * 1.003;
+    // T+1: no same-day sale; blocked exits remain pending until executable.
+    const canSell = i > entryIndex && bar.volume > 0 && !lockedDown;
+    if (canSell && (pendingExit || bar.low <= stop)) {
+      exitPrice = pendingExit ? bar.open : Math.min(bar.open, stop);
+      outcome = "stop";
+      exitIndex = i;
+    } else if (canSell && mode === "fixed" && bar.high >= pattern.target) {
+      exitPrice = pattern.target;
+      outcome = "target";
+      exitIndex = i;
+    } else if (canSell && i - entryIndex >= horizon) {
+      exitPrice = bar.open;
+      outcome = "expired";
+      exitIndex = i;
+    }
+    dailyReturns.push({ date: bar.date, gross: bar.close / entry - 1 });
+    if (outcome !== "open") break;
+    if (bar.low <= stop) pendingExit = true;
+    // Today's high/ATR can only tighten TOMORROW's stop.
+    if (mode === "trend") {
+      peak = Math.max(peak, bar.high);
+      const atr = wilderAtr(bars.slice(Math.max(0, i - 100), i + 1));
+      if (atr != null) stop = Math.max(stop, peak - 3 * atr);
+    }
+  }
   return {
     pattern: { ...pattern, entry },
     outcome,
     signalDate: bars[signal].date,
+    entryDate: first.date,
     exitDate: bars[exitIndex].date,
-    holdDays: exitIndex - signal,
-    returnPct: entry > 0 ? exitPrice / entry - 1 : 0,
+    holdDays: exitIndex - entryIndex,
+    returnPct: exitPrice / entry - 1,
     exitPrice,
+    riskPct,
+    exitMode: mode,
+    dailyReturns,
   };
 }
 
-export function backtestAdamEve(bars: Bar[]): PastTrade[] {
-  const found = collectPatterns(bars, true)
-    .filter((pattern) => pattern.score >= (pattern.breakoutIndex == null ? 58 : 48))
-    .sort((a, b) => a.eveIndex - b.eveIndex);
-  const kept: Pattern[] = [];
-  for (const pattern of found) {
-    const prev = kept[kept.length - 1];
-    if (prev && pattern.adamIndex <= prev.eveIndex + 10) {
-      if (pattern.score > prev.score) kept[kept.length - 1] = pattern;
-      continue;
-    }
-    kept.push(pattern);
-  }
-  return kept.map((pattern) => settleTrade(bars, pattern)).reverse();
+export function backtestAdamEve(
+  bars: Bar[],
+  mode: ExitMode = "trend",
+  code = "",
+): PastTrade[] {
+  return confirmedSignals(bars, "adam-eve")
+    .map((p) => settleTrade(bars, p, mode, code))
+    .reverse();
 }
 
 /**
@@ -455,7 +564,9 @@ export function backtestAdamEve(bars: Bar[]): PastTrade[] {
 function collectEveAdam(bars: Bar[], archive: boolean): Pattern[] {
   if (bars.length < 90) return [];
   const last = bars.length - 1;
-  const pivots = swingLows(bars, 3).filter((index) => index > 40 && index < last - 2);
+  const pivots = swingLows(bars, 3).filter(
+    (index) => index > 40 && index < last - 2,
+  );
   const found: Pattern[] = [];
   let best: Pattern | null = null;
 
@@ -507,7 +618,13 @@ function collectEveAdam(bars: Bar[], archive: boolean): Pattern[] {
       const priorDrop = (priorHigh - eveLow) / priorHigh;
       if (priorDrop < 0.1) continue;
 
-      const eveBasin = basin(bars, eveIndex, 0.034, Math.max(0, eveIndex - 18), Math.max(eveIndex, neckIndex - 1));
+      const eveBasin = basin(
+        bars,
+        eveIndex,
+        0.034,
+        Math.max(0, eveIndex - 18),
+        Math.max(eveIndex, neckIndex - 1),
+      );
       const adamBasin = basin(
         bars,
         adamIndex,
@@ -519,10 +636,16 @@ function collectEveAdam(bars: Bar[], archive: boolean): Pattern[] {
       if (adamBasin.width < 1 || adamBasin.width > 7) continue;
       if (eveBasin.width < adamBasin.width + 4) continue;
 
-      const neighbors = [adamIndex - 2, adamIndex - 1, adamIndex + 1, adamIndex + 2]
+      const neighbors = [
+        adamIndex - 2,
+        adamIndex - 1,
+        adamIndex + 1,
+        adamIndex + 2,
+      ]
         .filter((index) => index >= 0 && index < bars.length)
         .map((index) => bars[index].low);
-      const neighborAvg = neighbors.reduce((sum, value) => sum + value, 0) / neighbors.length;
+      const neighborAvg =
+        neighbors.reduce((sum, value) => sum + value, 0) / neighbors.length;
       const spike = (neighborAvg - adamLow) / adamLow;
       if (spike < 0.01) continue;
 
@@ -585,7 +708,8 @@ function collectEveAdam(bars: Bar[], archive: boolean): Pattern[] {
         const since = last - breakoutIndex;
         if (lastClose < neckline * 0.985) continue;
         if (extension > 0.12 || since > 16) stage = "extended";
-        else if (retestIndex != null && lastClose >= neckline * 0.998) stage = "retest";
+        else if (retestIndex != null && lastClose >= neckline * 0.998)
+          stage = "retest";
         else stage = "breakout";
       }
 
@@ -597,7 +721,8 @@ function collectEveAdam(bars: Bar[], archive: boolean): Pattern[] {
       const adamVol = averageVolume(bars, adamIndex);
 
       const stop = floor * 0.99;
-      const decision = breakoutIndex != null ? bars[breakoutIndex].close : neckline;
+      const decision =
+        breakoutIndex != null ? bars[breakoutIndex].close : neckline;
       const openRisk = decision - stop;
       const minTarget = decision + openRisk;
       const half = (priorHigh + floor) / 2;
@@ -606,7 +731,8 @@ function collectEveAdam(bars: Bar[], archive: boolean): Pattern[] {
       if (!archive && breakoutIndex != null) {
         const left = target - lastClose;
         const riskNow = lastClose - stop;
-        if (!(left > 0 && riskNow > 0 && left / riskNow >= 0.8)) stage = "extended";
+        if (!(left > 0 && riskNow > 0 && left / riskNow >= 1))
+          stage = "extended";
       }
       const entry = decision;
       const risk = entry - stop;
@@ -620,7 +746,8 @@ function collectEveAdam(bars: Bar[], archive: boolean): Pattern[] {
       score += rebound >= 0.08 && rebound <= 0.22 ? 8 : 3;
       score += STAGE_BIAS[stage];
       if (breakoutIndex != null && breakoutIndex - adamIndex <= 6) score += 8;
-      else if (breakoutIndex != null && breakoutIndex - adamIndex <= 10) score += 4;
+      else if (breakoutIndex != null && breakoutIndex - adamIndex <= 10)
+        score += 4;
       if (breakoutIndex != null && rvol >= 1.4) score += 6;
       if (eveVol > 0 && adamVol > eveVol) score += 4;
       if (stage === "forming" && !(archive && !recent)) {
@@ -680,21 +807,14 @@ export function detectEveAdam(bars: Bar[]): Pattern | null {
   return collectEveAdam(bars, false)[0] ?? null;
 }
 
-export function backtestEveAdam(bars: Bar[]): PastTrade[] {
-  const found = collectEveAdam(bars, true)
-    .filter((pattern) => pattern.score >= (pattern.breakoutIndex == null ? 58 : 48))
-    .sort((a, b) => a.adamIndex - b.adamIndex);
-  const kept: Pattern[] = [];
-  for (const pattern of found) {
-    const prev = kept[kept.length - 1];
-    const prevEnd = prev ? Math.max(prev.adamIndex, prev.eveIndex) : -1;
-    if (prev && pattern.eveIndex <= prevEnd + 10) {
-      if (pattern.score > prev.score) kept[kept.length - 1] = pattern;
-      continue;
-    }
-    kept.push(pattern);
-  }
-  return kept.map((pattern) => settleTrade(bars, pattern)).reverse();
+export function backtestEveAdam(
+  bars: Bar[],
+  mode: ExitMode = "trend",
+  code = "",
+): PastTrade[] {
+  return confirmedSignals(bars, "eve-adam")
+    .map((p) => settleTrade(bars, p, mode, code))
+    .reverse();
 }
 
 export function clipPattern(bars: Bar[], pattern: Pattern | null, tail = 140) {
@@ -708,7 +828,8 @@ export function clipPattern(bars: Bar[], pattern: Pattern | null, tail = 140) {
   const start = Math.max(0, first - 18);
   const end = Math.min(bars.length, endIndex + 24);
   const view = bars.slice(start, end);
-  const shift = (index: number | null) => (index == null ? null : index - start);
+  const shift = (index: number | null) =>
+    index == null ? null : index - start;
   return {
     bars: view,
     pattern: {

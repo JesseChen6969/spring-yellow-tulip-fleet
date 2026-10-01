@@ -1,4 +1,11 @@
-import { Line, LineChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
+import {
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type { StrategyReport } from "@/lib/market/scan";
 import { ratio, signedPct } from "@/components/terminal/format";
 
@@ -48,22 +55,34 @@ export function StrategyPanel({
               <button
                 type="button"
                 onClick={() => onSpan("2y")}
-                className={span === "2y" ? "h-10 rounded-full bg-fg px-3 text-sm text-bg" : "h-10 rounded-full px-3 text-sm text-muted"}
+                className={
+                  span === "2y"
+                    ? "h-10 rounded-full bg-fg px-3 text-sm text-bg"
+                    : "h-10 rounded-full px-3 text-sm text-muted"
+                }
               >
                 近两年
               </button>
               <button
                 type="button"
                 onClick={() => onSpan("20y")}
-                className={span === "20y" ? "h-10 rounded-full bg-fg px-3 text-sm text-bg" : "h-10 rounded-full px-3 text-sm text-muted"}
+                className={
+                  span === "20y"
+                    ? "h-10 rounded-full bg-fg px-3 text-sm text-bg"
+                    : "h-10 rounded-full px-3 text-sm text-muted"
+                }
               >
                 过去二十年
               </button>
             </>
           ) : null}
-          {report ? (
-            <button type="button" onClick={onRetry} className="h-10 rounded-lg px-3 text-sm text-muted">
-              重新计算
+          {!loading ? (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="h-10 rounded-lg px-3 text-sm text-muted"
+            >
+              {report ? "重新计算" : "运行回测"}
             </button>
           ) : null}
         </div>
@@ -79,16 +98,36 @@ export function StrategyPanel({
           <div className="mt-4 flex flex-wrap items-end gap-x-8 gap-y-3">
             <div>
               <p className="text-xs text-muted">组合收益</p>
-              <p className={`font-serif text-4xl tabular-nums ${tone(report.totalReturn)}`}>
+              <p
+                className={`font-serif text-4xl tabular-nums ${tone(report.totalReturn)}`}
+              >
                 {signedPct(report.totalReturn)}
               </p>
             </div>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-              <Stat label="年化" value={signedPct(report.annualized)} className={tone(report.annualized)} />
-              <Stat label="最大回撤" value={signedPct(report.maxDrawdown)} className="text-down" />
-              <Stat label="胜率" value={signedPct(report.winRate).replace("+", "")} />
-              <Stat label="笔均净收益" value={signedPct(report.avgNet)} className={tone(report.avgNet)} />
-              <Stat label="成交笔数" value={String(report.taken)} />
+              <Stat
+                label="年化"
+                value={signedPct(report.annualized)}
+                className={tone(report.annualized)}
+              />
+              <Stat
+                label="最大回撤"
+                value={signedPct(report.maxDrawdown)}
+                className="text-down"
+              />
+              <Stat
+                label="胜率"
+                value={signedPct(report.winRate).replace("+", "")}
+              />
+              <Stat
+                label="笔均净收益"
+                value={signedPct(report.avgNet)}
+                className={tone(report.avgNet)}
+              />
+              <Stat
+                label="已平仓 / 持仓"
+                value={`${report.closed} / ${report.open}`}
+              />
               <Stat label="盈亏比" value={ratio(report.payoff)} />
               <Stat label="可买信号" value={String(report.signals)} />
               <Stat label="弱市少做" value={String(report.skippedRegime)} />
@@ -98,6 +137,7 @@ export function StrategyPanel({
           <div className="mt-3 h-36">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={report.curve}>
+                <XAxis dataKey="date" hide />
                 <YAxis
                   domain={["auto", "auto"]}
                   width={46}
@@ -113,7 +153,9 @@ export function StrategyPanel({
                     return (
                       <div className="rounded-lg bg-surface px-2 py-1 text-xs shadow-ring">
                         <p className="text-muted">{label}</p>
-                        <p className={`tabular-nums ${tone(equity - 1)}`}>{signedPct(equity - 1)}</p>
+                        <p className={`tabular-nums ${tone(equity - 1)}`}>
+                          {signedPct(equity - 1)}
+                        </p>
                       </div>
                     );
                   }}
@@ -132,21 +174,60 @@ export function StrategyPanel({
 
           <p className="mt-2 text-xs leading-5 text-muted">
             {rule ? `${rule} ` : ""}
-            最多同时 8 笔，每笔用当时净值的 12.5%。上证或沪深300收在 20 日线下方超过 3% 且均线向下时，只做评分不低于
-            76 的信号，持仓上限降到 3 笔，而且当天只新开 1 笔。这段样本里这样的弱市有 {report.riskOffDays} 个交易日。费用按佣金万 2.5、卖出印花税万 5、滑点单边 0.1%。回撤按平仓净值，不含持仓途中的波动，也没模拟一字跌停卖不出。样本是现在仍在交易的股票，不含已退市。
-            {report.rejected.amount || report.rejected.limit
-              ? ` 另有 ${report.rejected.amount} 笔因成交额、${report.rejected.limit} 笔因一字涨停没有买入。`
-              : ""}
-            {report.failed ? ` ${report.failed} 只日线没读到。` : ""}
+            V2：确认后次日开盘，单笔计划风险0.5%，仓位不超过12.5%，最多8笔。弱市仅限制新开仓（最多3笔、每日1笔、评分至少76），不强制减掉旧仓。
+            3倍ATR移动止损仅从下一日生效，最长120日；净值每日按收盘价估值，含未平仓盈亏。费用：佣金万2.5、卖出印花税万5、单边滑点0.1%。
+            {report.failed ? ` ${report.failed} 只数据失败，未纳入。` : ""}
+          </p>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <caption className="mb-2 text-left text-muted">
+                同一因果信号、同一风险预算；固定退出为对照，不是旧版收益
+              </caption>
+              <thead>
+                <tr>
+                  <th>退出规则</th>
+                  <th>收益</th>
+                  <th>日净值回撤</th>
+                  <th>已平仓</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>趋势：3 ATR / 120日</td>
+                  <td>{signedPct(report.totalReturn)}</td>
+                  <td>{signedPct(report.maxDrawdown)}</td>
+                  <td>{report.closed}</td>
+                </tr>
+                <tr>
+                  <td>固定目标 / 30日</td>
+                  <td>{signedPct(report.comparison.totalReturn)}</td>
+                  <td>{signedPct(report.comparison.maxDrawdown)}</td>
+                  <td>{report.comparison.closed}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-muted">
+            {report.warnings.join(" ")}
           </p>
         </>
       ) : null}
-      {loading && report ? <p className="mt-2 text-xs text-muted">正在重算…</p> : null}
+      {loading && report ? (
+        <p className="mt-2 text-xs text-muted">正在重算…</p>
+      ) : null}
     </section>
   );
 }
 
-function Stat({ label, value, className = "text-fg" }: { label: string; value: string; className?: string }) {
+function Stat({
+  label,
+  value,
+  className = "text-fg",
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
   return (
     <div>
       <dt className="text-xs text-muted">{label}</dt>

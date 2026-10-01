@@ -9,8 +9,8 @@ export const NORMAL_SLOTS = 8;
 export const RISK_OFF_SLOTS = 3;
 export const SLOT_WEIGHT = 0.125;
 
-const BUY_COST = 0.00025 + 0.001;
-const SELL_COST = 0.00025 + 0.0005 + 0.001;
+export const BUY_COST = 0.00025 + 0.001;
+export const SELL_COST = 0.00025 + 0.0005 + 0.001;
 
 export function blockedName(name: string) {
   const text = name.replace(/\s+/g, "").toUpperCase();
@@ -20,8 +20,9 @@ export function blockedName(name: string) {
   return false;
 }
 
-export function limitPct(code: string) {
+export function limitPct(code: string, date = "9999-12-31") {
   const board = boardOf(code);
+  if (board === "chinext" && date < "2020-08-24") return 0.1;
   if (board === "chinext" || board === "star") return 0.2;
   return 0.1;
 }
@@ -50,7 +51,12 @@ export function netReturn(gross: number) {
 
 export type GateCode = "name" | "ipo" | "halt" | "limit" | "amount";
 
-export function liveGate(code: string, name: string, bars: Bar[], marketDate: string): GateCode | null {
+export function liveGate(
+  code: string,
+  name: string,
+  bars: Bar[],
+  marketDate: string,
+): GateCode | null {
   if (blockedName(name)) return "name";
   if (bars.length < MIN_LISTED_BARS) return "ipo";
   const last = bars[bars.length - 1];
@@ -62,13 +68,17 @@ export function liveGate(code: string, name: string, bars: Bar[], marketDate: st
   return null;
 }
 
-export function entryGate(code: string, bars: Bar[], index: number, young: boolean): GateCode | null {
+export function entryGate(
+  code: string,
+  bars: Bar[],
+  index: number,
+  young: boolean,
+): GateCode | null {
   if (young && index < MIN_LISTED_BARS) return "ipo";
   if (index < 21) return "amount";
   const bar = bars[index];
-  const prev = bars[index - 1];
   if (!bar || bar.volume <= 0) return "halt";
-  if (isOneWordLimitUp(prev, bar, limitPct(code))) return "limit";
+  // The entry-day open limit is checked by the execution engine.
   if (averageAmount(bars, index, 20) < MIN_AMOUNT) return "amount";
   return null;
 }
@@ -90,10 +100,12 @@ export function markIndex(bars: Bar[]) {
   const map = new Map<string, IndexState>();
   for (let index = 24; index < bars.length; index += 1) {
     let sum = 0;
-    for (let cursor = index - 19; cursor <= index; cursor += 1) sum += bars[cursor].close;
+    for (let cursor = index - 19; cursor <= index; cursor += 1)
+      sum += bars[cursor].close;
     const ma = sum / 20;
     let prev = 0;
-    for (let cursor = index - 24; cursor <= index - 5; cursor += 1) prev += bars[cursor].close;
+    for (let cursor = index - 24; cursor <= index - 5; cursor += 1)
+      prev += bars[cursor].close;
     const maPrev = prev / 20;
     const gap = ma > 0 ? bars[index].close / ma - 1 : 0;
     map.set(bars[index].date, { riskOff: gap <= -0.03 && ma < maPrev, gap });
@@ -107,7 +119,10 @@ export type RegimeSnapshot = {
   asOf: string;
 };
 
-export function describeRegime(shanghai: Bar[], csi: Bar[]): {
+export function describeRegime(
+  shanghai: Bar[],
+  csi: Bar[],
+): {
   byDate: Record<string, boolean>;
   snapshot: RegimeSnapshot;
   riskOffDays: number;
@@ -118,16 +133,25 @@ export function describeRegime(shanghai: Bar[], csi: Bar[]): {
   const byDate: Record<string, boolean> = {};
   let riskOffDays = 0;
   for (const bar of csi) {
-    const flag = (sh.get(bar.date)?.riskOff ?? false) || (cs.get(bar.date)?.riskOff ?? false);
+    const flag =
+      (sh.get(bar.date)?.riskOff ?? false) ||
+      (cs.get(bar.date)?.riskOff ?? false);
     byDate[bar.date] = flag;
     if (flag) riskOffDays += 1;
   }
-  const asOf = csi[csi.length - 1]?.date ?? shanghai[shanghai.length - 1]?.date ?? "";
+  const asOf =
+    csi[csi.length - 1]?.date ?? shanghai[shanghai.length - 1]?.date ?? "";
   const shNow = sh.get(asOf);
   const csNow = cs.get(asOf);
   const parts: string[] = [];
-  if (csNow?.riskOff) parts.push(`沪深300在20日线下方 ${(Math.abs(csNow.gap) * 100).toFixed(1)}%，均线向下`);
-  if (shNow?.riskOff) parts.push(`上证指数在20日线下方 ${(Math.abs(shNow.gap) * 100).toFixed(1)}%，均线向下`);
+  if (csNow?.riskOff)
+    parts.push(
+      `沪深300在20日线下方 ${(Math.abs(csNow.gap) * 100).toFixed(1)}%，均线向下`,
+    );
+  if (shNow?.riskOff)
+    parts.push(
+      `上证指数在20日线下方 ${(Math.abs(shNow.gap) * 100).toFixed(1)}%，均线向下`,
+    );
   const riskOff = parts.length > 0;
   return {
     byDate,

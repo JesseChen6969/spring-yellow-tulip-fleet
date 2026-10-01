@@ -1,7 +1,7 @@
 #!/bin/sh
 # Revive the preview dev server. Idempotent: exit if already healthy.
 set -e
-cd /workspace
+cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8080/; then
   exit 0
 fi
@@ -20,3 +20,4 @@ while [ "$i" -lt 40 ]; do
 done
 echo "dev server did not become healthy" >&2
 exit 1
+

@@ -3,3 +3,9 @@ node_modules/
 .github_repo
 .env
 .env.*
+
+
+# Generated local build / test artifacts
+.vercel/
+.cache/
+.grok/preview.log

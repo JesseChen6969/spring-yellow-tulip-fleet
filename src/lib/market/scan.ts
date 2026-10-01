@@ -19,8 +19,19 @@ import {
   liveGate,
   type RegimeSnapshot,
 } from "@/lib/market/gates";
-import { cleanName, loadBars, loadSymbol, loadUniverse, mapPool, type QuoteRow } from "@/lib/market/quotes";
-import { runStrategyBacktest, type Span, type StrategyReport } from "@/lib/market/strategy-run";
+import {
+  cleanName,
+  loadBars,
+  loadSymbol,
+  loadUniverse,
+  mapPool,
+  type QuoteRow,
+} from "@/lib/market/quotes";
+import {
+  runStrategyBacktest,
+  type Span,
+  type StrategyReport,
+} from "@/lib/market/strategy-run";
 
 export type { Span, StrategyReport } from "@/lib/market/strategy-run";
 export type { RegimeSnapshot } from "@/lib/market/gates";
@@ -30,6 +41,7 @@ export type Board = "main" | "chinext" | "star";
 export type Book = "adam-eve" | "eve-adam";
 
 export type ScanInput = {
+  refresh?: boolean;
   size: 60 | 100;
   depth: 800 | 1600;
   boards: Board[];
@@ -66,6 +78,8 @@ export type ScanResult = {
   hits: ScanHit[];
   focus: ScanHit | null;
   regime: RegimeSnapshot | null;
+  fetchedAt: string;
+  dataPolicy: string;
 };
 
 function present(
@@ -77,9 +91,14 @@ function present(
   full = false,
 ): ScanHit {
   const metrics = marketMetrics(bars);
-  const start = full ? 0 : pattern ? Math.max(0, pattern.adamIndex - 16) : Math.max(0, bars.length - 140);
+  const start = full
+    ? 0
+    : pattern
+      ? Math.max(0, pattern.adamIndex - 16)
+      : Math.max(0, bars.length - 140);
   const view = bars.slice(start);
-  const shift = (index: number | null) => (index == null ? null : index - start);
+  const shift = (index: number | null) =>
+    index == null ? null : index - start;
   const shifted: Pattern | null = pattern
     ? {
         ...pattern,
@@ -127,10 +146,12 @@ function parseInput(input: unknown): ScanInput {
   const boards = Array.isArray(raw.boards)
     ? raw.boards.filter((board): board is Board => allowed.has(board as Board))
     : [];
-  const code = typeof raw.code === "string" ? raw.code.replace(/\D/g, "").slice(0, 6) : "";
+  const code =
+    typeof raw.code === "string" ? raw.code.replace(/\D/g, "").slice(0, 6) : "";
   const depth = raw.depth === 1600 ? 1600 : 800;
   return {
     size,
+    refresh: raw.refresh === true,
     depth,
     boards: boards.length ? boards : ["main", "chinext", "star"],
     code,
@@ -140,23 +161,32 @@ function parseInput(input: unknown): ScanInput {
 
 async function marketContext() {
   try {
-    const [shanghai, csi] = await Promise.all([loadSymbol("sh000001", 80), loadSymbol("sh000300", 80)]);
+    const [shanghai, csi] = await Promise.all([
+      loadSymbol("sh000001", 80),
+      loadSymbol("sh000300", 80),
+    ]);
     const sessions = csi.length >= 30 ? csi : shanghai;
     if (sessions.length < 30) return null;
     const described = describeRegime(shanghai, csi);
-    const marketDate = sessions.length >= 2 ? sessions[sessions.length - 2].date : sessions[sessions.length - 1].date;
+    const marketDate = sessions[sessions.length - 1].date;
     return { snapshot: described.snapshot, marketDate };
   } catch {
     return null;
   }
 }
 
-function passesPool(row: QuoteRow, input: ScanInput, node: string, allBoards: boolean) {
+function passesPool(
+  row: QuoteRow,
+  input: ScanInput,
+  node: string,
+  allBoards: boolean,
+) {
   const name = cleanName(String(row.name || ""));
   if (!row.code || blockedName(name)) return false;
   const board = boardOf(row.code);
   if (board === "other") return false;
-  if (!allBoards && node === "hs_a" && !input.boards.includes(board as Board)) return false;
+  if (!allBoards && node === "hs_a" && !input.boards.includes(board as Board))
+    return false;
   return true;
 }
 
@@ -189,10 +219,17 @@ async function runScan(input: ScanInput): Promise<ScanResult> {
   if (input.code) {
     if (input.code.length !== 6) throw new Error("请输入 6 位 A 股代码");
     const picked = engine(input.book);
-    const loaded = await loadBars(input.code, 640);
-    const history = picked.history(loaded.bars);
+    const loaded = await loadBars(input.code, 640, input.refresh);
+    const history = picked.history(loaded.bars, "trend", input.code);
     const pattern = picked.detect(loaded.bars);
-    const focus = present(input.code, loaded.name, 0, loaded.bars, pattern, true);
+    const focus = present(
+      input.code,
+      loaded.name,
+      0,
+      loaded.bars,
+      pattern,
+      true,
+    );
     focus.history = history;
     const gate = liveGate(input.code, focus.name, loaded.bars, marketDate);
     focus.gate = gate ? GATE_LABEL[gate] : null;
@@ -204,6 +241,8 @@ async function runScan(input: ScanInput): Promise<ScanResult> {
       hits: pattern && !gate ? [focus] : [],
       focus,
       regime,
+      fetchedAt: new Date(loaded.at).toISOString(),
+      dataPolicy: "仅使用已完成日线；收盘后16:00确认。",
     };
   }
 
@@ -211,29 +250,45 @@ async function runScan(input: ScanInput): Promise<ScanResult> {
   const only = input.boards.length === 1 ? input.boards[0] : null;
   const node = only === "star" ? "kcb" : only === "chinext" ? "cyb" : "hs_a";
   const rows =
-    input.book === "eve-adam" ? await loadRanked(node, input.depth) : await loadUniverse(node, input.size);
-  const selected = rows.filter((row) => passesPool(row, input, node, allBoards));
-  const pool = input.book === "eve-adam" ? selected.slice(0, input.depth) : selected;
+    input.book === "eve-adam"
+      ? await loadRanked(node, input.depth)
+      : await loadUniverse(node, input.size);
+  const selected = rows.filter((row) =>
+    passesPool(row, input, node, allBoards),
+  );
+  const pool =
+    input.book === "eve-adam" ? selected.slice(0, input.depth) : selected;
   const picked = engine(input.book);
   const floor = regime?.riskOff ? RISK_OFF_LIVE_SCORE : LIVE_SCORE;
 
   let failed = 0;
   let firstError = "";
-  const scanned = await mapPool(pool, input.book === "eve-adam" ? 12 : 8, async (row) => {
-    try {
-      const loaded = await loadBars(row.code);
-      const name = cleanName(loaded.name || row.name);
-      const gate = liveGate(row.code, name, loaded.bars, marketDate);
-      if (gate) return null;
-      const pattern = picked.detect(loaded.bars);
-      if (!pattern || pattern.score < floor) return null;
-      return present(row.code, name, Number(row.amount) || 0, loaded.bars, pattern);
-    } catch (error) {
-      failed += 1;
-      if (!firstError) firstError = error instanceof Error ? error.message : "日线读取失败";
-      return null;
-    }
-  });
+  const scanned = await mapPool(
+    pool,
+    input.book === "eve-adam" ? 12 : 8,
+    async (row) => {
+      try {
+        const loaded = await loadBars(row.code, 170, input.refresh);
+        const name = cleanName(loaded.name || row.name);
+        const gate = liveGate(row.code, name, loaded.bars, marketDate);
+        if (gate) return null;
+        const pattern = picked.detect(loaded.bars);
+        if (!pattern || pattern.score < floor) return null;
+        return present(
+          row.code,
+          name,
+          Number(row.amount) || 0,
+          loaded.bars,
+          pattern,
+        );
+      } catch (error) {
+        failed += 1;
+        if (!firstError)
+          firstError = error instanceof Error ? error.message : "日线读取失败";
+        return null;
+      }
+    },
+  );
 
   if (pool.length > 0 && failed === pool.length) {
     throw new Error(firstError || "日线源暂时没有回应");
@@ -258,6 +313,8 @@ async function runScan(input: ScanInput): Promise<ScanResult> {
     hits,
     focus: hits[0] ?? null,
     regime,
+    fetchedAt: new Date().toISOString(),
+    dataPolicy: "仅使用已完成日线；个股缓存最长8分钟，手动扫描绕过缓存。",
   };
 }
 
@@ -267,11 +324,20 @@ export const scanMarket = createServerFn({ method: "POST" })
 
 export const backtestStrategy = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
-    const raw = (input ?? {}) as { refresh?: boolean; book?: Book; span?: Span };
+    const raw = (input ?? {}) as {
+      refresh?: boolean;
+      book?: Book;
+      span?: Span;
+    };
     const book = parseBook(raw.book);
     const span: Span = book === "eve-adam" && raw.span === "20y" ? "20y" : "2y";
     return { refresh: raw.refresh === true, book, span };
   })
   .handler(async ({ data }) =>
-    runStrategyBacktest(data.refresh, data.book === "eve-adam" ? 500 : undefined, data.book, data.span),
+    runStrategyBacktest(
+      data.refresh,
+      data.book === "eve-adam" ? 500 : undefined,
+      data.book,
+      data.span,
+    ),
   );

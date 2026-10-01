@@ -1,10 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
-import { clipPattern, OUTCOME_LABEL, STAGE_LABEL, type PastTrade, type Stage } from "@/lib/pattern/adam-eve";
-import { scanMarket, backtestStrategy, type Board, type Book, type ScanHit, type ScanResult, type Span, type StrategyReport } from "@/lib/market/scan";
+import {
+  clipPattern,
+  OUTCOME_LABEL,
+  STAGE_LABEL,
+  type PastTrade,
+  type Stage,
+} from "@/lib/pattern/adam-eve";
+import {
+  scanMarket,
+  backtestStrategy,
+  type Board,
+  type Book,
+  type ScanHit,
+  type ScanResult,
+  type Span,
+  type StrategyReport,
+} from "@/lib/market/scan";
 import { PriceChart } from "@/components/terminal/price-chart";
 import { StrategyPanel } from "@/components/terminal/strategy-panel";
-import { amountYi, BOARD_LABEL, multiple, price, ratio, signedPct } from "@/components/terminal/format";
+import {
+  amountYi,
+  BOARD_LABEL,
+  multiple,
+  price,
+  ratio,
+  signedPct,
+} from "@/components/terminal/format";
 
 type StageFilter = "trade" | Stage | "all";
 type SortKey = "score" | "rr" | "fresh";
@@ -22,17 +44,22 @@ function tone(value: number) {
   return "text-muted";
 }
 
-const COPY: Record<Book, { title: string; lede: string; rule: string; pending: string }> = {
+const COPY: Record<
+  Book,
+  { title: string; lede: string; rule: string; pending: string }
+> = {
   "adam-eve": {
     title: "亚当夏娃",
     lede: "下跌末端先走出尖底亚当，再走出更宽的圆底夏娃。两底之间的高点是颈线。收盘站上颈线，才进入突破；回到颈线不破，是回踩。",
-    pending: "成交额前 200 只，近两年多。先尖底，再圆底，突破颈线才进场。",
+    pending:
+      "成交额前 200 只，近两年多。先尖底，再圆底，确认后次日开盘尝试进场。",
     rule: "这是原版：高位下杀后，尖底在前、圆底在后。",
   },
   "eve-adam": {
     title: "夏娃启V",
     lede: "底部先走成圆底夏娃，价格在低位来回。随后一根尖 V 拉起来，收盘越过这段区间的高点，才算起来。",
-    pending: "流动性池约 500 只，不按当日成交额前 100。近 20 日均额仍要过 8000 万。",
+    pending:
+      "流动性池约 500 只，不按当日成交额前 100。近 20 日均额仍要过 8000 万。",
     rule: "这是逆向：底部区间里圆底在前，尖 V 在后，两套信号互不混用。",
   },
 };
@@ -47,19 +74,31 @@ export function Terminal() {
   const [code, setCode] = useState("");
   const [busyScan, setBusyScan] = useState<Book | null>("adam-eve");
   const [span, setSpan] = useState<Span>("2y");
-  const [busyReport, setBusyReport] = useState<string | null>("adam-eve");
+  const [busyReport, setBusyReport] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [reportError, setReportError] = useState("");
   const [packs, setPacks] = useState<Partial<Record<Book, ScanResult>>>({});
-  const [reports, setReports] = useState<Partial<Record<string, StrategyReport>>>({});
-  const [picked, setPicked] = useState<Record<Book, string>>({ "adam-eve": "", "eve-adam": "" });
+  const [reports, setReports] = useState<
+    Partial<Record<string, StrategyReport>>
+  >({});
+  const [picked, setPicked] = useState<Record<Book, string>>({
+    "adam-eve": "",
+    "eve-adam": "",
+  });
   const result = packs[book] ?? null;
-  const reportId = book === "eve-adam" && span === "20y" ? "eve-adam:20y" : book;
+  const reportId =
+    book === "eve-adam" && span === "20y" ? "eve-adam:20y" : book;
   const report = reports[reportId] ?? null;
   const loading = busyScan === book;
   const selected = picked[book];
 
-  async function run(next?: { size?: 60 | 100; boards?: Board[]; code?: string; book?: Book; depth?: 800 | 1600 }) {
+  async function run(next?: {
+    size?: 60 | 100;
+    boards?: Board[];
+    code?: string;
+    book?: Book;
+    depth?: 800 | 1600;
+  }) {
     const active = next?.book ?? book;
     const query = {
       size: next?.size ?? size,
@@ -67,6 +106,7 @@ export function Terminal() {
       boards: next?.boards ?? boards,
       code: next?.code ?? "",
       book: active,
+      refresh: true,
     };
     setBusyScan(active);
     setError("");
@@ -87,11 +127,14 @@ export function Terminal() {
   async function loadReport(refresh = false, which?: Book, nextSpan?: Span) {
     const active = which ?? book;
     const chosen = active === "eve-adam" ? (nextSpan ?? span) : "2y";
-    const id = active === "eve-adam" && chosen === "20y" ? "eve-adam:20y" : active;
+    const id =
+      active === "eve-adam" && chosen === "20y" ? "eve-adam:20y" : active;
     setBusyReport(id);
     setReportError("");
     try {
-      const data = await backtestStrategy({ data: { refresh, book: active, span: chosen } });
+      const data = await backtestStrategy({
+        data: { refresh, book: active, span: chosen },
+      });
       setReports((current) => ({ ...current, [id]: data }));
     } catch (cause) {
       setReportError(cause instanceof Error ? cause.message : "回测没有跑完");
@@ -112,13 +155,10 @@ export function Terminal() {
     setError("");
     setReportError("");
     if (!packs[next]) void run({ book: next, code: "" });
-    if (!reports[next]) void loadReport(false, next);
   }
 
   useEffect(() => {
     void run();
-    const timer = window.setTimeout(() => void loadReport(), 1200);
-    return () => window.clearTimeout(timer);
     // The book starts after the scan has taken the first quotes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -127,7 +167,9 @@ export function Terminal() {
     setBoards((current) => {
       const has = current.includes(board);
       if (has && current.length === 1) return current;
-      return has ? current.filter((item) => item !== board) : [...current, board];
+      return has
+        ? current.filter((item) => item !== board)
+        : [...current, board];
     });
   }
 
@@ -176,7 +218,9 @@ export function Terminal() {
       <header className="border-b border-line">
         <div className="mx-auto flex max-w-6xl flex-col gap-5 px-4 py-5 sm:px-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-xl">
-            <p className="text-xs tracking-widest text-muted">A SHARE · DAILY · 两套分开</p>
+            <p className="text-xs tracking-widest text-muted">
+              A SHARE · DAILY · 两套分开
+            </p>
             <div className="mt-2 flex flex-wrap gap-2">
               {(
                 [
@@ -198,8 +242,12 @@ export function Terminal() {
                 </button>
               ))}
             </div>
-            <h1 className="mt-3 font-serif text-3xl text-fg sm:text-4xl">{COPY[book].title}</h1>
-            <p className="mt-2 text-sm leading-6 text-muted">{COPY[book].lede}</p>
+            <h1 className="mt-3 font-serif text-3xl text-fg sm:text-4xl">
+              {COPY[book].title}
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              {COPY[book].lede}
+            </p>
           </div>
           <form
             className="flex w-full flex-col gap-2 sm:max-w-sm"
@@ -245,7 +293,9 @@ export function Terminal() {
           report={report}
           loading={busyReport === reportId}
           error={reportError}
-          onRetry={() => void loadReport(true, book, book === "eve-adam" ? span : "2y")}
+          onRetry={() =>
+            void loadReport(true, book, book === "eve-adam" ? span : "2y")
+          }
           title={book === "eve-adam" ? "逆向收益" : "策略收益"}
           pending={
             book === "eve-adam" && span === "20y"
@@ -332,127 +382,157 @@ export function Terminal() {
             </button>
             <p className="mt-2 text-xs leading-5 text-muted">
               {result
-                ? `${result.universe} · 已扫 ${result.scanned} 只${result.failed ? ` · ${result.failed} 只无数据` : ""} · 截至 ${result.asOf || "—"}`
+                ? `${result.universe} · 已扫 ${result.scanned} 只${result.failed ? ` · ${result.failed} 只无数据` : ""} · 已完成日线截至 ${result.asOf || "—"}`
                 : book === "eve-adam"
                   ? "底部不看当日成交额前 100。从成交额高的往下取，近 20 日均额低于 8000 万的仍然剔除。"
                   : "剔除 ST、退市整理、上市不足 60 日、近 20 日均成交额低于 8000 万、停牌和一字涨停。"}
             </p>
+            {result ? (
+              <p className="mt-1 text-xs text-muted">{result.dataPolicy}</p>
+            ) : null}
             {result?.regime ? (
-              <p className={`mt-1 text-xs leading-5 ${result.regime.riskOff ? "text-fg" : "text-muted"}`}>
+              <p
+                className={`mt-1 text-xs leading-5 ${result.regime.riskOff ? "text-fg" : "text-muted"}`}
+              >
                 {result.regime.detail}
               </p>
             ) : null}
           </div>
 
           <div className="order-3 flex flex-col gap-3 lg:order-none">
-          <div className="flex flex-wrap gap-2">
-            {(
-              [
-                ["trade", "可交易"],
-                ["forming", "构筑"],
-                ["breakout", "突破"],
-                ["retest", "回踩"],
-                ["extended", "延伸"],
-                ["all", "全部"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setStage(key)}
-                className={
-                  stage === key
-                    ? "h-10 rounded-full bg-fg px-3 text-xs text-bg"
-                    : "h-10 rounded-full border border-line px-3 text-xs text-muted"
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
-            {(
-              [
-                ["score", "按阶段与评分"],
-                ["rr", "按盈亏比"],
-                ["fresh", "按突破远近"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setSort(key)}
-                className={sort === key ? "h-10 text-fg" : "h-10 text-muted"}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {error ? <p className="rounded-xl bg-surface px-3 py-3 text-sm text-up">{error}</p> : null}
-
-          <div className="flex flex-col gap-2">
-            {loading && !result
-              ? Array.from({ length: 4 }, (_, index) => (
-                  <div key={index} className="h-24 animate-pulse rounded-2xl bg-surface motion-reduce:animate-none" />
-                ))
-              : null}
-            {!loading && visible.length === 0 ? (
-              <div className="rounded-2xl bg-surface px-4 py-5 text-sm leading-6 text-muted">
-                {result?.universe === "单票" && result.focus
-                  ? `${result.focus.name} 现在不是可交易形态。历史机会在图的下方。`
-                  : result?.focus && !result.focus.pattern
-                    ? `${result.focus.name} 当前日线里没有${book === "eve-adam" ? "先圆底再尖 V 的底部" : "够干净的亚当夏娃"}。K 线仍然可以看。`
-                    : book === "eve-adam"
-                      ? "这批流动性池里没有符合的底部。可以换成「往下 1600」，原版名单不会混进来。"
-                      : "这批样本里没有符合当前筛选的形态。可以换成「全部」，或加大到成交额前 100。另一套形态在页顶切换，不会混进这里。"}
-              </div>
-            ) : null}
-            {visible.map((hit) => {
-              const pattern = hit.pattern;
-              if (!pattern) return null;
-              const on = active?.code === hit.code;
-              return (
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["trade", "候选"],
+                  ["forming", "构筑"],
+                  ["breakout", "突破"],
+                  ["retest", "回踩"],
+                  ["extended", "延伸"],
+                  ["all", "全部"],
+                ] as const
+              ).map(([key, label]) => (
                 <button
-                  key={hit.code}
+                  key={key}
                   type="button"
-                  onClick={() => {
-                    setPicked((current) => ({ ...current, [book]: hit.code }));
-                    setPacks((current) => {
-                      const pack = current[book];
-                      return pack ? { ...current, [book]: { ...pack, focus: hit } } : current;
-                    });
-                  }}
+                  onClick={() => setStage(key)}
                   className={
-                    on
-                      ? "rounded-2xl bg-surface px-3 py-3 text-left shadow-ring-strong"
-                      : "rounded-2xl bg-surface px-3 py-3 text-left shadow-ring"
+                    stage === key
+                      ? "h-10 rounded-full bg-fg px-3 text-xs text-bg"
+                      : "h-10 rounded-full border border-line px-3 text-xs text-muted"
                   }
                 >
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="font-serif text-lg">{hit.name}</span>
-                    <span className="tabular-nums text-up">{pattern.score}</span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
-                    <span>
-                      {hit.code} · {BOARD_LABEL[hit.board]} · {STAGE_LABEL[pattern.stage]}
-                    </span>
-                    <span className={`tabular-nums ${tone(hit.changePct)}`}>{signedPct(hit.changePct)}</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                    <span className="text-muted">
-                      颈线 <span className="tabular-nums text-fg">{price(pattern.neckline)}</span>
-                    </span>
-                    <span className="text-muted">
-                      盈亏比 <span className="tabular-nums text-fg">{ratio(pattern.rewardRisk)}</span>
-                    </span>
-                    <span className="text-right text-muted">{amountYi(hit.amount)}</span>
-                  </div>
+                  {label}
                 </button>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+              {(
+                [
+                  ["score", "按阶段与评分"],
+                  ["rr", "按盈亏比"],
+                  ["fresh", "按突破远近"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSort(key)}
+                  className={sort === key ? "h-10 text-fg" : "h-10 text-muted"}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {error ? (
+              <p className="rounded-xl bg-surface px-3 py-3 text-sm text-up">
+                {error}
+              </p>
+            ) : null}
+
+            <div className="flex flex-col gap-2">
+              {loading && !result
+                ? Array.from({ length: 4 }, (_, index) => (
+                    <div
+                      key={index}
+                      className="h-24 animate-pulse rounded-2xl bg-surface motion-reduce:animate-none"
+                    />
+                  ))
+                : null}
+              {!loading && visible.length === 0 ? (
+                <div className="rounded-2xl bg-surface px-4 py-5 text-sm leading-6 text-muted">
+                  {result?.universe === "单票" && result.focus
+                    ? `${result.focus.name} 现在不是可交易形态。历史机会在图的下方。`
+                    : result?.focus && !result.focus.pattern
+                      ? `${result.focus.name} 当前日线里没有${book === "eve-adam" ? "先圆底再尖 V 的底部" : "够干净的亚当夏娃"}。K 线仍然可以看。`
+                      : book === "eve-adam"
+                        ? "这批流动性池里没有符合的底部。可以换成「往下 1600」，原版名单不会混进来。"
+                        : "这批样本里没有符合当前筛选的形态。可以换成「全部」，或加大到成交额前 100。另一套形态在页顶切换，不会混进这里。"}
+                </div>
+              ) : null}
+              {visible.map((hit) => {
+                const pattern = hit.pattern;
+                if (!pattern) return null;
+                const on = active?.code === hit.code;
+                return (
+                  <button
+                    key={hit.code}
+                    type="button"
+                    onClick={() => {
+                      setPicked((current) => ({
+                        ...current,
+                        [book]: hit.code,
+                      }));
+                      setPacks((current) => {
+                        const pack = current[book];
+                        return pack
+                          ? { ...current, [book]: { ...pack, focus: hit } }
+                          : current;
+                      });
+                    }}
+                    className={
+                      on
+                        ? "rounded-2xl bg-surface px-3 py-3 text-left shadow-ring-strong"
+                        : "rounded-2xl bg-surface px-3 py-3 text-left shadow-ring"
+                    }
+                  >
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="font-serif text-lg">{hit.name}</span>
+                      <span className="tabular-nums text-up">
+                        {pattern.score}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
+                      <span>
+                        {hit.code} · {BOARD_LABEL[hit.board]} ·{" "}
+                        {STAGE_LABEL[pattern.stage]}
+                      </span>
+                      <span className={`tabular-nums ${tone(hit.changePct)}`}>
+                        {signedPct(hit.changePct)}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <span className="text-muted">
+                        颈线{" "}
+                        <span className="tabular-nums text-fg">
+                          {price(pattern.neckline)}
+                        </span>
+                      </span>
+                      <span className="text-muted">
+                        盈亏比{" "}
+                        <span className="tabular-nums text-fg">
+                          {ratio(pattern.rewardRisk)}
+                        </span>
+                      </span>
+                      <span className="text-right text-muted">
+                        {amountYi(hit.amount)}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -465,7 +545,9 @@ export function Terminal() {
 }
 
 function Detail({ hit, book }: { hit: ScanHit; book: Book }) {
-  const [dossier, setDossier] = useState<ScanHit | null>(hit.history ? hit : null);
+  const [dossier, setDossier] = useState<ScanHit | null>(
+    hit.history ? hit : null,
+  );
   const [loadingHistory, setLoadingHistory] = useState(hit.history == null);
   const [pick, setPick] = useState<number | null>(null);
   const eveFirst = book === "eve-adam";
@@ -480,7 +562,14 @@ function Detail({ hit, book }: { hit: ScanHit; book: Book }) {
     let cancel = false;
     setDossier(null);
     setLoadingHistory(true);
-    scanMarket({ data: { size: 60, boards: ["main", "chinext", "star"], code: hit.code, book } })
+    scanMarket({
+      data: {
+        size: 60,
+        boards: ["main", "chinext", "star"],
+        code: hit.code,
+        book,
+      },
+    })
       .then((result) => {
         if (!cancel) setDossier(result.focus);
       })
@@ -501,8 +590,14 @@ function Detail({ hit, book }: { hit: ScanHit; book: Book }) {
     ? null
     : trades.findIndex((trade) => trade.outcome !== "missed");
   const resolvedPick =
-    pick ?? (autoPick != null && autoPick >= 0 ? autoPick : !source.pattern && trades.length > 0 ? 0 : null);
-  const chartTrade = resolvedPick == null ? null : (trades[resolvedPick] ?? null);
+    pick ??
+    (autoPick != null && autoPick >= 0
+      ? autoPick
+      : !source.pattern && trades.length > 0
+        ? 0
+        : null);
+  const chartTrade =
+    resolvedPick == null ? null : (trades[resolvedPick] ?? null);
   const view = clipPattern(source.bars, chartTrade?.pattern ?? source.pattern);
   const pattern = source.pattern;
 
@@ -525,13 +620,23 @@ function Detail({ hit, book }: { hit: ScanHit; book: Book }) {
           </p>
         </div>
         <div className="text-right">
-          <p className={`font-serif text-2xl tabular-nums ${tone(hit.changePct)}`}>{price(hit.price)}</p>
-          <p className={`text-sm tabular-nums ${tone(hit.changePct)}`}>{signedPct(hit.changePct)}</p>
+          <p
+            className={`font-serif text-2xl tabular-nums ${tone(hit.changePct)}`}
+          >
+            {price(hit.price)}
+          </p>
+          <p className={`text-sm tabular-nums ${tone(hit.changePct)}`}>
+            {signedPct(hit.changePct)}
+          </p>
         </div>
       </div>
 
       <div className="mt-3">
-        <PriceChart bars={view.bars} pattern={view.pattern} eveFirst={eveFirst} />
+        <PriceChart
+          bars={view.bars}
+          pattern={view.pattern}
+          eveFirst={eveFirst}
+        />
       </div>
 
       <HistoryBoard
@@ -545,7 +650,11 @@ function Detail({ hit, book }: { hit: ScanHit; book: Book }) {
       />
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {chartTrade ? <PastPlan trade={chartTrade} /> : pattern ? <Plan hit={{ ...source, pattern }} book={book} /> : null}
+        {chartTrade ? (
+          <PastPlan trade={chartTrade} />
+        ) : pattern ? (
+          <Plan hit={{ ...source, pattern }} book={book} />
+        ) : null}
         <Metrics hit={source} />
       </div>
 
@@ -558,12 +667,16 @@ function Detail({ hit, book }: { hit: ScanHit; book: Book }) {
 
 function historySummary(trades: PastTrade[]) {
   const closed = trades.filter(
-    (trade) => trade.outcome === "target" || trade.outcome === "stop" || trade.outcome === "expired",
+    (trade) =>
+      trade.outcome === "target" ||
+      trade.outcome === "stop" ||
+      trade.outcome === "expired",
   );
-  if (!closed.length) return `共 ${trades.length} 次形态，还没有走完的样本。`;
-  const wins = closed.filter((trade) => trade.outcome === "target").length;
-  const avg = closed.reduce((sum, trade) => sum + trade.returnPct, 0) / closed.length;
-  return `已结束 ${closed.length} 次，先到目标 ${wins} 次，平均收益 ${signedPct(avg)}。`;
+  if (!closed.length) return `共 ${trades.length} 次形态，尚无已完成交易。`;
+  const wins = closed.filter((trade) => trade.returnPct > 0).length;
+  const avg =
+    closed.reduce((sum, trade) => sum + trade.returnPct, 0) / closed.length;
+  return `已结束 ${closed.length} 次，盈利 ${wins} 次，平均收益 ${signedPct(avg)}。`;
 }
 
 function HistoryBoard({
@@ -631,11 +744,19 @@ function HistoryBoard({
                     : "h-16 shrink-0 rounded-xl border border-line px-3 text-left text-fg"
                 }
               >
-                <span className={`block text-xs ${on ? "opacity-70" : "text-muted"}`}>{trade.signalDate}</span>
+                <span
+                  className={`block text-xs ${on ? "opacity-70" : "text-muted"}`}
+                >
+                  {trade.signalDate}
+                </span>
                 <span className="mt-1 block text-sm">
                   {OUTCOME_LABEL[trade.outcome]}
-                  <span className={`ml-2 tabular-nums ${on ? "" : tone(trade.returnPct)}`}>
-                    {trade.outcome === "missed" ? "" : signedPct(trade.returnPct)}
+                  <span
+                    className={`ml-2 tabular-nums ${on ? "" : tone(trade.returnPct)}`}
+                  >
+                    {trade.outcome === "missed"
+                      ? ""
+                      : signedPct(trade.returnPct)}
                   </span>
                 </span>
               </button>
@@ -644,7 +765,7 @@ function HistoryBoard({
         </div>
       ) : null}
       <p className="mt-2 text-xs leading-5 text-muted">
-        突破日收盘进场，之后 30 个交易日内先碰目标还是先碰止损。同一根 K 线都碰到，记为止损。
+        信号确认后次日开盘尝试进场；趋势退出采用结构止损与3倍ATR移动止损，最长120日。遵守T+1，跳空按可成交开盘价处理。
       </p>
     </div>
   );
@@ -656,11 +777,12 @@ function PastPlan({ trade }: { trade: PastTrade }) {
     ? [
         ["夏娃", trade.signalDate],
         ["颈线", price(trade.pattern.neckline)],
-        ["结果", "价格没有站上颈线"],
+        ["结果", "无下一日数据或成交条件未满足"],
         ["评分", String(trade.pattern.score)],
       ]
     : [
-        ["信号", trade.signalDate],
+        ["确认信号", trade.signalDate],
+        ["成交日期", trade.entryDate ?? "未成交"],
         ["入场", price(trade.pattern.entry)],
         ["止损", price(trade.pattern.stop)],
         ["目标", price(trade.pattern.target)],
@@ -671,7 +793,9 @@ function PastPlan({ trade }: { trade: PastTrade }) {
       ];
   return (
     <div className="rounded-xl border border-line p-3">
-      <h3 className="font-serif text-base">{missed ? "未触发的形态" : "这次回测"}</h3>
+      <h3 className="font-serif text-base">
+        {missed ? "未触发的形态" : "这次回测"}
+      </h3>
       <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3 text-sm">
         {rows.map(([label, value]) => (
           <div key={label}>
@@ -688,7 +812,8 @@ function Plan({ hit, book = "adam-eve" }: { hit: ScanHit; book?: Book }) {
   const pattern = hit.pattern;
   if (!pattern) return null;
   const reverse = book === "eve-adam";
-  const atMarket = Math.abs(pattern.entry - hit.price) / Math.max(hit.price, 0.01) < 0.004;
+  const atMarket =
+    Math.abs(pattern.entry - hit.price) / Math.max(hit.price, 0.01) < 0.004;
   const rows = [
     [
       "入场",
@@ -726,7 +851,7 @@ function Plan({ hit, book = "adam-eve" }: { hit: ScanHit; book?: Book }) {
       </dl>
       <p className="mt-3 text-xs leading-5 text-muted">
         {reverse
-          ? "盈亏比按突破当天算，不按现在的价格。浅底不再用那一点高度当目标。现价离目标已经近于止损的，标成延伸，不进可交易。"
+          ? "盈亏比按突破当天算，不按现在的价格。浅底不再用那一点高度当目标。现价剩余盈亏比不足1的，标成延伸。目标为参考位，V2趋势退出不在此固定止盈。"
           : "构筑阶段的入场价是颈线，不是现价。延伸阶段往往已经吃掉测量涨幅，盈亏比会变差。"}
       </p>
     </div>
@@ -736,10 +861,18 @@ function Plan({ hit, book = "adam-eve" }: { hit: ScanHit; book?: Book }) {
 function Metrics({ hit }: { hit: ScanHit }) {
   const pattern = hit.pattern;
   const rows = [
-    ["ATR 倍数", multiple(hit.atrMultipleFromMa), "收盘相对 20 日均线，以 ATR 计"],
+    [
+      "ATR 倍数",
+      multiple(hit.atrMultipleFromMa),
+      "收盘相对 20 日均线，以 ATR 计",
+    ],
     ["偏离均线", signedPct(hit.gainFromMaPct), "收盘相对 20 日均线"],
     ["ATR%", signedPct(hit.atrPct).replace("+", ""), `ATR ${price(hit.atr)}`],
-    ["相对量能", `${ratio(pattern?.rvol ?? hit.rvol)}x`, pattern ? "突破日或最近一日 / 前 20 日" : "最近一日 / 前 20 日"],
+    [
+      "相对量能",
+      `${ratio(pattern?.rvol ?? hit.rvol)}x`,
+      pattern ? "突破日或最近一日 / 前 20 日" : "最近一日 / 前 20 日",
+    ],
     ["量能较均量", signedPct(hit.volVsAvg), "最近一根相对前 20 日"],
     ["60 日均线", price(hit.ma60), `20 日 ${price(hit.ma)}`],
   ];
@@ -748,7 +881,10 @@ function Metrics({ hit }: { hit: ScanHit }) {
       <h3 className="font-serif text-base">结构读数</h3>
       <dl className="mt-3 flex flex-col gap-3">
         {rows.map(([label, value, note]) => (
-          <div key={label} className="flex items-baseline justify-between gap-3">
+          <div
+            key={label}
+            className="flex items-baseline justify-between gap-3"
+          >
             <div>
               <dt className="text-sm text-fg">{label}</dt>
               <dd className="text-xs text-muted">{note}</dd>
@@ -761,11 +897,25 @@ function Metrics({ hit }: { hit: ScanHit }) {
   );
 }
 
-function Rules({ compact = false, book = "adam-eve" }: { compact?: boolean; book?: Book }) {
+function Rules({
+  compact = false,
+  book = "adam-eve",
+}: {
+  compact?: boolean;
+  book?: Book;
+}) {
   const reverse = book === "eve-adam";
   return (
-    <div className={compact ? "rounded-xl border border-line p-3" : "rounded-2xl bg-surface p-4 shadow-ring sm:p-5"}>
-      <h2 className="font-serif text-xl">{compact ? "规则" : reverse ? "逆向在找什么" : "这套扫描在找什么"}</h2>
+    <div
+      className={
+        compact
+          ? "rounded-xl border border-line p-3"
+          : "rounded-2xl bg-surface p-4 shadow-ring sm:p-5"
+      }
+    >
+      <h2 className="font-serif text-xl">
+        {compact ? "规则" : reverse ? "逆向在找什么" : "这套扫描在找什么"}
+      </h2>
       {!compact ? (
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
           {reverse
@@ -783,7 +933,9 @@ function Rules({ compact = false, book = "adam-eve" }: { compact?: boolean; book
           </p>
         </div>
         <div>
-          <h3 className="text-sm text-fg">{reverse ? "然后 V 起来" : "夏娃"}</h3>
+          <h3 className="text-sm text-fg">
+            {reverse ? "然后 V 起来" : "夏娃"}
+          </h3>
           <p className="mt-1 text-sm leading-6 text-muted">
             {reverse
               ? "圆底之后的尖底。它不该明显击穿夏娃。随后很少几根 K 线里，收盘要冲过区间高点。慢吞吞磨上去的不算。"
@@ -793,7 +945,7 @@ function Rules({ compact = false, book = "adam-eve" }: { compact?: boolean; book
         <div>
           <h3 className="text-sm text-fg">颈线与进场</h3>
           <p className="mt-1 text-sm leading-6 text-muted">
-            颈线取两底之间的最高价。收盘价站上颈线才进场；之后再次靠近颈线且守住，记为回踩。止损放在两底较低者略下方。
+            颈线取两底之间的最高价。收盘站上颈线且形态可确认，下一交易日尝试进场；之后再次靠近颈线且守住，记为回踩。止损放在两底较低者略下方。
           </p>
         </div>
         <div>
@@ -806,7 +958,9 @@ function Rules({ compact = false, book = "adam-eve" }: { compact?: boolean; book
         </div>
       </div>
       <p className="mt-4 text-xs leading-5 text-muted">
-        {reverse ? "这一页和亚当夏娃分开扫描、分开回测。" : "前复权日线，红涨绿跌。"}
+        {reverse
+          ? "这一页和亚当夏娃分开扫描、分开回测。"
+          : "前复权日线，红涨绿跌。"}
         规则扫描只描述形态，不是买卖指令，也不保证下一根 K 线。
       </p>
     </div>
